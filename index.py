@@ -97,12 +97,16 @@ def ping():
     return jsonify({'status': 'active'}), 200
 
 # ══════════════════════════════════════════════════════
-#  📊  DASHBOARD API (FOR WEB UI)
+#  📊  ADMIN/DASHBOARD API
+#  Requires NOVA_SECRET in headers for local app
 # ══════════════════════════════════════════════════════
 
-@app.route('/api/list', methods=['GET'])
-def list_serials():
-    # ملاحظة: في النسخة النهائية يجب إضافة باسوورد هنا للـ Dashboard
+def is_admin():
+    return request.headers.get('X-Nova-Secret') == SECRET_KEY
+
+@app.route('/api/admin/list', methods=['GET'])
+def admin_list():
+    if not is_admin(): return jsonify({'error': 'unauthorized'}), 401
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT * FROM serials ORDER BY id DESC")
@@ -112,27 +116,57 @@ def list_serials():
     conn.close()
     return jsonify(results)
 
-@app.route('/api/generate', methods=['POST'])
-def create_key():
-    data = request.get_json()
-    client = data.get('client', 'Unknown')
+@app.route('/api/admin/generate', methods=['POST'])
+def admin_generate():
+    if not is_admin(): return jsonify({'error': 'unauthorized'}), 401
+    data = request.get_json() or {}
+    client = data.get('client', '').strip()
+    notes = data.get('notes', '').strip()
     new_key = generate_serial()
     
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO serials (serial, client_name, status, created_at) VALUES (%s, %s, %s, %s)",
-                (new_key, client, 'pending', datetime.now()))
+    cur.execute("INSERT INTO serials (serial, client_name, notes, status, created_at) VALUES (%s, %s, %s, %s, %s)",
+                (new_key, client, notes, 'pending', datetime.now()))
     conn.commit()
     cur.close()
     conn.close()
+    log(new_key, 'GENERATED', f'client={client}')
     return jsonify({'serial': new_key})
 
-@app.route('/api/revoke', methods=['POST'])
-def revoke_key():
-    serial = request.get_json().get('serial')
+@app.route('/api/admin/revoke', methods=['POST'])
+def admin_revoke():
+    if not is_admin(): return jsonify({'error': 'unauthorized'}), 401
+    serial = (request.get_json() or {}).get('serial')
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("UPDATE serials SET status = 'revoked' WHERE serial = %s", (serial,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    log(serial, 'REVOKED')
+    return jsonify({'success': True})
+
+@app.route('/api/admin/reset', methods=['POST'])
+def admin_reset():
+    if not is_admin(): return jsonify({'error': 'unauthorized'}), 401
+    serial = (request.get_json() or {}).get('serial')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("UPDATE serials SET hwid = NULL, status = 'pending' WHERE serial = %s", (serial,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    log(serial, 'HWID_RESET')
+    return jsonify({'success': True})
+
+@app.route('/api/admin/delete', methods=['POST'])
+def admin_delete():
+    if not is_admin(): return jsonify({'error': 'unauthorized'}), 401
+    serial = (request.get_json() or {}).get('serial')
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM serials WHERE serial = %s", (serial,))
     conn.commit()
     cur.close()
     conn.close()
